@@ -1,0 +1,124 @@
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+
+
+plt.rcParams['pdf.fonttype'] = 42
+plt.rcParams['ps.fonttype'] = 42
+
+try:
+    from adjustText import adjust_text
+    HAS_ADJUST_TEXT = True
+except ImportError:
+    HAS_ADJUST_TEXT = False
+    print("NOTE: 'adjustText' module not found. Plots will be generated, but labels may overlap.")
+
+
+files_to_process = [
+    # --- PLASMABLASTS ---
+    ("protein_plasmablast_sm_v_cc.csv", "Plasmablast Protein", "volcano_protein_plasmablast", 
+     ['CD39', 'ENTPD1'], True),
+    ("rna_plasmablast_sm_v_cc.csv", "Plasmablast RNA", "volcano_rna_plasmablast", 
+     ['ENTPD1', 'ADA2', 'CECR1'], True),
+    
+    # --- ACTIVATED CD4+ T CELLS ---
+    ("protein_CD4_activated_sm_v_cc.csv", "Activated CD4+ Protein", "volcano_protein_cd4", 
+     ['CD39', 'ENTPD1', 'CD28', 'ICOS', 'CD278'], True),
+    ("rna_CD4_activated_sm_v_cc.csv", "Activated CD4+ RNA", "volcano_rna_cd4", 
+     ['LAG3', 'HAVCR2', 'CTLA4', 'PDCD1', 'TIGIT', 'IL10', 'IFNG', 'CD28', 'ICOS', 'TNFRSF4', 'CCR7', 'SELL', 'TCF7', 'IL7R', 'BCL2'], False),
+    
+    # --- MONOCYTES ---
+    ("protein_mono_sm_v_cc.csv", "Monocyte Protein", "volcano_protein_mono", 
+     ['S100A8', 'S100A9', 'CD14', 'HLA-DRA', 'HLA-DQA2'], True),
+    ("rna_mono_sm_v_cc.csv", "Monocyte RNA", "volcano_rna_mono", 
+     ['S100A8', 'S100A9', 'HLA-DQA2', 'HLA-DRA', 'CD14', 'TNF'], False)
+]
+
+def create_volcano_plot(csv_path, title, output_base, highlight_genes, auto_label_top=False):
+    print(f"Processing: {title}...")
+    
+    if not os.path.exists(csv_path):
+        print(f"  ERROR: File not found: {csv_path}")
+        return
+
+    try:
+        df = pd.read_csv(csv_path)
+        id_col = 'gene' if 'gene' in df.columns else 'protein'
+        
+        # Preprocessing
+        min_nonzero_p = df.loc[df['p_val_adj'] > 0, 'p_val_adj'].min()
+        if pd.isna(min_nonzero_p): min_nonzero_p = 1e-300
+        df['p_val_adj'] = df['p_val_adj'].replace(0, min_nonzero_p / 10)
+        df['neg_log10_p'] = -np.log10(df['p_val_adj'])
+        
+        neg_log10_p_thresh = 1.3
+        logfc_thresh_rna = 1.0
+        logfc_thresh_prot = 0.35
+        current_logfc_thresh = logfc_thresh_rna if 'rna' in csv_path.lower() else logfc_thresh_prot
+        
+        df['color'] = 'grey'
+        df.loc[(df['neg_log10_p'] >= neg_log10_p_thresh) & (df['avg_log2FC'] >= current_logfc_thresh), 'color'] = '#E91E63'
+        df.loc[(df['neg_log10_p'] >= neg_log10_p_thresh) & (df['avg_log2FC'] <= -current_logfc_thresh), 'color'] = '#2196F3'
+
+        genes_to_label = set(highlight_genes)
+        if auto_label_top:
+            sig_df = df[df['neg_log10_p'] >= neg_log10_p_thresh].sort_values('neg_log10_p', ascending=False)
+            top_up = sig_df[sig_df['avg_log2FC'] >= current_logfc_thresh].head(8)[id_col].tolist()
+            top_down = sig_df[sig_df['avg_log2FC'] <= -current_logfc_thresh].head(8)[id_col].tolist()
+            genes_to_label.update(top_up)
+            genes_to_label.update(top_down)
+
+        label_df = df[df[id_col].isin(genes_to_label)].copy()
+        label_df = label_df[label_df['color'] != 'grey']
+        
+        # --- Plotting with Editable Text ---
+        plt.figure(figsize=(7, 7))
+        
+        plt.scatter(df[df['color'] == 'grey']['avg_log2FC'], df[df['color'] == 'grey']['neg_log10_p'], c='lightgrey', s=15, alpha=0.5, zorder=1)
+        plt.scatter(df[df['color'] == '#E91E63']['avg_log2FC'], df[df['color'] == '#E91E63']['neg_log10_p'], c='#E91E63', s=40, alpha=0.7, zorder=2)
+        plt.scatter(df[df['color'] == '#2196F3']['avg_log2FC'], df[df['color'] == '#2196F3']['neg_log10_p'], c='#2196F3', s=40, alpha=0.7, zorder=2)
+
+        texts = []
+        for i, row in label_df.iterrows():
+            is_manual = row[id_col] in highlight_genes
+            if is_manual:
+                plt.scatter(row['avg_log2FC'], row['neg_log10_p'], facecolors='none', edgecolors='black', s=120, linewidth=1.5, zorder=10)
+                font_weight = 'bold'
+                font_size = 14
+            else:
+                font_weight = 'normal'
+                font_size = 12
+
+            texts.append(plt.text(row['avg_log2FC'], row['neg_log10_p'], row[id_col], fontsize=font_size, fontweight=font_weight, ha='center', va='bottom'))
+
+        if HAS_ADJUST_TEXT:
+            try: adjust_text(texts, arrowprops=dict(arrowstyle='-', color='black', lw=1))
+            except: pass
+
+        plt.axvline(x=current_logfc_thresh, color='grey', linestyle='--', linewidth=1)
+        plt.axvline(x=-current_logfc_thresh, color='grey', linestyle='--', linewidth=1)
+        plt.axhline(y=neg_log10_p_thresh, color='grey', linestyle='--', linewidth=1)
+        
+        plt.title(title, fontsize=16, fontweight='bold', pad=15)
+        plt.xlabel("Log2 Fold Change", fontsize=14)
+        plt.ylabel("-Log10 Adj. P-value", fontsize=14)
+        plt.xticks(fontsize=12)
+        plt.yticks(fontsize=12)
+        
+        max_fc = max(abs(df['avg_log2FC'].min()), abs(df['avg_log2FC'].max()))
+        limit = max_fc * 1.1
+        plt.xlim(-limit, limit)
+        
+        plt.tight_layout()
+        plt.savefig(f"{output_base}.pdf", format='pdf', dpi=300)
+        plt.savefig(f"{output_base}.png", format='png', dpi=300)
+        print(f"  Saved {output_base}.pdf/.png")
+        plt.close()
+        
+    except Exception as e:
+        print(f"  Error processing {csv_path}: {e}")
+
+for args in files_to_process:
+    create_volcano_plot(*args)
