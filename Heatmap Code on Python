@@ -1,0 +1,81 @@
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+import os
+
+# --- Configuration ---
+# 1. Place this notebook in the SAME FOLDER as your .csv files.
+# 2. If your files have different names, update the list below.
+
+files_to_process = [
+    # (Filename, Title for Plot, Output Filename)
+    ("protein_plasmablast_sm_v_cc.csv", "Plasmablast Protein (Top 20)", "heatmap_protein_plasmablast.png"),
+    ("rna_plasmablast_sm_v_cc.csv", "Plasmablast RNA (Top 20)", "heatmap_rna_plasmablast.png"),
+    ("protein_CD4_activated_sm_v_cc.csv", "Activated CD4+ Protein (Top 20)", "heatmap_protein_cd4.png"),
+    ("rna_CD4_activated_sm_v_cc.csv", "Activated CD4+ RNA (Top 20)", "heatmap_rna_cd4.png"),
+    ("protein_mono_sm_v_cc.csv", "Monocyte Protein (Top 20)", "heatmap_protein_mono.png"),
+    ("rna_mono_sm_v_cc.csv", "Monocyte RNA (Top 20)", "heatmap_rna_mono.png")
+]
+
+def create_deg_heatmap(csv_path, title, output_filename):
+    print(f"Processing: {title}...")
+    
+    # Check if file exists
+    if not os.path.exists(csv_path):
+        print(f"  ERROR: File not found: {csv_path}")
+        return
+
+    try:
+        # Load data
+        df = pd.read_csv(csv_path)
+        
+        # Determine identifier column (gene or protein)
+        id_col = 'gene' if 'gene' in df.columns else 'protein'
+        
+        # Filter for Significance (Adjusted p-value < 0.05)
+        sig_df = df[df['p_val_adj'] < 0.05].copy()
+        
+        if sig_df.empty:
+            print(f"  No significant markers found in {csv_path}")
+            return
+
+        # Sort by Magnitude (Absolute Log2FC) to get the "biggest" changes
+        sig_df['abs_logFC'] = sig_df['avg_log2FC'].abs()
+        top_20 = sig_df.sort_values(by='abs_logFC', ascending=False).head(20)
+        
+        # Sort by Actual LogFC for the heatmap (Up on top, Down on bottom)
+        top_20 = top_20.sort_values(by='avg_log2FC', ascending=False)
+        
+        # Prepare data for heatmap
+        heatmap_data = top_20.set_index(id_col)[['avg_log2FC']]
+        
+        # --- Plotting ---
+        plt.figure(figsize=(4, 8)) # Tall and narrow
+        
+        # Color scale: Red for Up, Blue for Down, centered at 0
+        max_val = max(abs(heatmap_data['avg_log2FC'].min()), abs(heatmap_data['avg_log2FC'].max()))
+        
+        sns.heatmap(heatmap_data, 
+                    cmap='vlag', 
+                    center=0, 
+                    vmin=-max_val, 
+                    vmax=max_val,
+                    annot=True, # Show numbers
+                    fmt=".2f",
+                    cbar_kws={'label': 'Log2 Fold Change'})
+        
+        plt.title(title)
+        plt.tight_layout()
+        
+        # Save and Show
+        plt.savefig(output_filename, dpi=300)
+        plt.show() # Display in the notebook
+        print(f"  Saved to {output_filename}\n")
+        plt.close()
+        
+    except Exception as e:
+        print(f"  Error processing {csv_path}: {e}")
+
+# --- Run the Loop ---
+for csv_file, title, out_file in files_to_process:
+    create_deg_heatmap(csv_file, title, out_file)
